@@ -1,0 +1,166 @@
+---
+- name: Instalación de Apache, MySQL y PHP con sus módulos
+  hosts: all
+  become: yes
+  tasks:
+    - name: Actualizar lista de paquetes
+      apt:
+        update_cache: yes
+
+    - name: Instalación de Apache2
+      apt:
+        name: apache2
+        state: present
+
+    - name: Instalación de MySQL
+      apt:
+        name: mysql-server
+        state: present
+      vars:
+        mysql_root_password: 
+    - name: Instalación de PHP y módulos para Apache
+      apt:
+        name: 
+          - php
+          - libapache2-mod-php
+        state: present
+
+    - name: Instalar UFW 
+      apt:
+        name: ufw
+        state: present
+
+    - name: Permitir tráfico HTTP en el puerto 80
+      ufw:
+        rule: allow
+        port: 80
+        proto: tcp
+
+    - name: Verificar el estado de UFW
+      command: ufw status verbose
+
+    - name: Reiniciar Apache2
+      become: yes
+      service:
+        name: apache2
+        state: restarted
+
+    - name: Crear usuario y contraseña en MySQL
+      mysql_user:
+        name: jaziel
+        password: 55869
+        priv: '.:ALL'
+        host: localhost
+        state: present
+      become: yes
+
+    - name: Configurar MySQL para que escuche en 192.168.100.95
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address\s*='
+        line: 'bind-address = 192.168.100.95'
+
+    - name: Reiniciar el servicio MySQL y aplicar los cambios
+      service:
+        name: mysql
+        state: restarted
+
+    - name: Crear carpeta /var/www/html/cnicolas.com
+      file:
+       path: /var/www/html/cnicolas.com
+       state: directory
+       mode: '0755'
+
+    - name: Crear archivo de configuración del VirtualHost para www.cnicolas.com.conf
+      copy:
+        src: /etc/ansible/confApache/www.cnicolas.com.conf 
+        dest: /etc/apache2/sites-available/www.cnicolas.com.conf
+      notify: Reiniciar Apache2
+
+    - name: Crear archivo de configuración del VirtualHost para app.cnicolas.com.conf
+      copy:
+        src: /etc/ansible/confApache/app.cnicolas.com.conf 
+        dest: /etc/apache2/sites-available/app.cnicolas.com.conf
+      notify: Reiniciar Apache2
+
+    - name: Habilitar el VirtualHost cnicolas.com.conf
+      command: a2ensite cnicolas.com.conf
+      args:
+        executable: /usr/sbin/a2ensite
+      notify: Reiniciar Apache2
+
+    - name: Habilitar el VirtualHost app.cnicolas.com.conf
+      command: a2ensite app.cnicolas.com.conf
+      args:
+        executable: /usr/sbin/a2ensite
+      notify: Reiniciar Apache2
+
+  handlers:
+    - name: Reiniciar Apache2
+      service:
+        name: apache2
+        state: restarted
+
+- name: Crear la base de datos y tablas en MySQL
+  hosts: 192.168.100.95
+  become: yes
+  tasks:
+    - name: Eliminar cuentas anónimas y base de datos de prueba
+      mysql_db:
+        name: "{{ item }}"
+        state: absent
+    with_items:
+      - test
+      - mysql.session
+      - mysql.sys
+      
+    - name: Crear la base de datos
+      mysql_db:
+        name: users
+        state: present
+      environment:
+        MYSQL_USER: jaziel
+        MYSQL_HOST: 192.168.100.95
+        MYSQL_PASSWORD: 55869
+
+    - name: Usar la base de datos
+      mysql_db:
+        name: users
+      environment:
+        MYSQL_USER: jaziel
+        MYSQL_HOST: 192.168.100.95
+        MYSQL_PASSWORD: 55869
+
+- name: Ejecutar consulta SQL
+  hosts: all
+  become: yes
+  tasks:
+    - name: Crear la tabla 'usuarios' si no existe
+      command: mysql -u jaziel -p 55869 -h 192.168.100.95 -e "USE users; CREATE TABLE usuarios (id INT AUTO_INCREMENT PRIMARY KEY, usuario VARCHAR(255) NOT NULL, contraseña VARCHAR(255) NOT NULL );"
+      when: table_check.rc != 0
+
+    - name: Salir de MySQL
+      command: mysql -u jaziel -p 55869 -h 192.168.100.95 -e "EXIT"
+
+
+- name: Copiar archivos HTML y PHP a /var/www/html/cnicolas.com
+  hosts: 192.168.100.95
+  become: yes
+  tasks:
+    - name: Copiar archivos HTML y PHP
+      copy:
+        src: /etc/ansible/www/index.html  
+        dest: /var/www/html/cnicolas.com/index.html
+      notify: Reiniciar Apache2  
+
+    - name: Copiar archivo PHP
+      copy:
+        src: /etc/ansible/www/api.php  
+        dest: /var/www/html/cnicolas.com/api.php
+      notify: Reiniciar Apache2  
+
+  handlers:
+    - name: Reiniciar Apache2
+      service:
+        name: apache2
+        state: restarted
